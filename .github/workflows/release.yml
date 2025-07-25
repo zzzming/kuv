@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v2
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv sync
+
+    - name: Build package
+      run: |
+        uv build
+
+    - name: Extract version from tag
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: KUV ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## KUV - Kubernetes Usage Viewer ${{ steps.get_version.outputs.VERSION }}
+          
+          ### Features
+          - Terminal-based Kubernetes node utilization monitoring
+          - Color-coded resource usage indicators
+          - Interactive node and pod analysis
+          - Auto-refresh capabilities
+          - Advanced sorting and navigation
+          
+          ### Installation
+          ```bash
+          # Download and extract the release
+          # Or install from PyPI (if published)
+          pip install kuv
+          ```
+          
+          ### Usage
+          ```bash
+          python main.py
+          ```
+          
+          See README.md for complete installation and usage instructions.
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/kuv-${{ steps.get_version.outputs.VERSION }}-py3-none-any.whl
+        asset_name: kuv-${{ steps.get_version.outputs.VERSION }}-py3-none-any.whl
+        asset_content_type: application/octet-stream
