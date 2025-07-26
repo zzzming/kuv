@@ -574,10 +574,10 @@ class KUVApp(App):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle node selection"""
         # Update status to show selection is working
-        self.update_status(f"Selected row {event.row_index} in table {event.data_table.id}")
+        self.update_status(f"Selected row {event.cursor_row} in table {event.data_table.id}")
         
-        if event.data_table.id == "node-table" and self.nodes and event.row_index < len(self.nodes):
-            selected_node = self.nodes[event.row_index]
+        if event.data_table.id == "node-table" and self.nodes and event.cursor_row < len(self.nodes):
+            selected_node = self.nodes[event.cursor_row]
             self.selected_node = selected_node
             
             # Update pods title
