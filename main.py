@@ -114,6 +114,82 @@ class KubernetesClient:
         else:
             return f"{minutes}m"
 
+    def get_node_group(self, node) -> Optional[str]:
+        """Get node group with intelligent fallback logic"""
+        if not node.metadata.labels:
+            return self.extract_nodegroup_from_name(node.metadata.name)
+        
+        # 1. Try standard cloud provider labels
+        node_group = (
+            node.metadata.labels.get('eks.amazonaws.com/nodegroup') or
+            node.metadata.labels.get('cloud.google.com/gke-nodepool') or  
+            node.metadata.labels.get('kubernetes.azure.com/agentpool')
+        )
+        
+        if node_group:
+            return node_group
+            
+        # 2. Try alternative/legacy labels
+        node_group = (
+            node.metadata.labels.get('cloud.google.com/gke-node-pool-name') or  # Older GKE
+            node.metadata.labels.get('alpha.eksctl.io/nodegroup-name') or       # eksctl
+            node.metadata.labels.get('kubernetes.io/cluster') or                # Generic cluster label
+            node.metadata.labels.get('agentpool')                               # AKS alternative
+        )
+        
+        if node_group:
+            return node_group
+            
+        # 3. Extract from node name patterns
+        return self.extract_nodegroup_from_name(node.metadata.name)
+
+    def extract_nodegroup_from_name(self, node_name: str) -> Optional[str]:
+        """Extract node group from common cloud provider naming patterns"""
+        if not node_name:
+            return None
+            
+        # GKE pattern: gke-cluster-name-nodepool-name-hash-node
+        # Example: gke-my-cluster-default-pool-12345678-abcd
+        if node_name.startswith('gke-'):
+            parts = node_name.split('-')
+            if len(parts) >= 4:
+                # Skip 'gke', cluster name, find pool name
+                # Look for pattern: gke-cluster-pool-hash-node
+                for i in range(2, len(parts) - 2):
+                    if parts[i] == 'pool' and i > 2:
+                        # Found 'pool', nodegroup is parts before 'pool'
+                        return '-'.join(parts[2:i+1])  # e.g., "default-pool"
+                    elif 'pool' in parts[i]:
+                        return parts[i]  # e.g., "nodepool1"
+        
+        # EKS pattern: ip-10-0-1-23.region.compute.internal or eksctl generated names
+        # Often contains nodegroup name in various positions
+        if 'nodegroup' in node_name.lower():
+            parts = node_name.lower().split('-')
+            for i, part in enumerate(parts):
+                if 'nodegroup' in part or 'ng' in part:
+                    return part
+        
+        # AKS pattern: aks-nodepool1-12345678-vmss000000
+        if node_name.startswith('aks-'):
+            parts = node_name.split('-')
+            if len(parts) >= 3:
+                return parts[1]  # Usually the nodepool name
+        
+        # Generic patterns - look for common nodepool indicators
+        lower_name = node_name.lower()
+        pool_indicators = ['pool', 'group', 'nodes', 'worker', 'spot', 'gpu', 'cpu']
+        
+        for indicator in pool_indicators:
+            if indicator in lower_name:
+                parts = node_name.split('-')
+                for part in parts:
+                    if indicator in part.lower():
+                        return part
+        
+        # If no pattern matches, return None (will show as "default" in UI)
+        return None
+
     async def get_nodes(self) -> List[NodeInfo]:
         """Fetch node information"""
         try:
@@ -184,7 +260,7 @@ class KubernetesClient:
                     age=self.get_age(node.metadata.creation_timestamp),
                     version=node.status.node_info.kubelet_version if node.status.node_info else "Unknown",
                     zone=node.metadata.labels.get('topology.kubernetes.io/zone') if node.metadata.labels else None,
-                    node_group=node.metadata.labels.get('eks.amazonaws.com/nodegroup') if node.metadata.labels else None,
+                    node_group=self.get_node_group(node),
                     instance_type=node.metadata.labels.get('node.kubernetes.io/instance-type') if node.metadata.labels else None,
                     cpu_capacity=self.parse_quantity(node.status.capacity.get('cpu', '0') if node.status.capacity else '0'),
                     memory_capacity=self.parse_quantity(node.status.capacity.get('memory', '0') if node.status.capacity else '0'),
@@ -300,7 +376,7 @@ class NodeTable(DataTable):
         
     def on_mount(self) -> None:
         self.add_columns(
-            "Name", "Status", "Role", "Age", "Version", 
+            "Name", "Status", "Node Group", "Age", "Instance", 
             "CPU Req", "CPU %", "Mem Req", "Mem %", "Zone"
         )
 
@@ -518,9 +594,9 @@ class KUVApp(App):
             table.add_row(
                 node.name,
                 Text(node.status, style="green" if node.ready else "red"),
-                ", ".join(node.roles),
+                node.node_group or "default",
                 node.age,
-                node.version,
+                node.instance_type or "Unknown",
                 cpu_req,
                 Text(f"{cpu_percent:.1f}%", style=cpu_color),
                 mem_req,
