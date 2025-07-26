@@ -98,15 +98,15 @@ class KubernetesClient:
         """Calculate age from timestamp"""
         if not timestamp:
             return "Unknown"
-        
+
         now = datetime.now(timezone.utc)
         created = timestamp.replace(tzinfo=timezone.utc)
         diff = now - created
-        
+
         days = diff.days
         hours = diff.seconds // 3600
         minutes = (diff.seconds % 3600) // 60
-        
+
         if days > 0:
             return f"{days}d"
         elif hours > 0:
@@ -118,17 +118,17 @@ class KubernetesClient:
         """Get node group with intelligent fallback logic"""
         if not node.metadata.labels:
             return self.extract_nodegroup_from_name(node.metadata.name)
-        
+
         # 1. Try standard cloud provider labels
         node_group = (
             node.metadata.labels.get('eks.amazonaws.com/nodegroup') or
-            node.metadata.labels.get('cloud.google.com/gke-nodepool') or  
+            node.metadata.labels.get('cloud.google.com/gke-nodepool') or
             node.metadata.labels.get('kubernetes.azure.com/agentpool')
         )
-        
+
         if node_group:
             return node_group
-            
+
         # 2. Try alternative/legacy labels
         node_group = (
             node.metadata.labels.get('cloud.google.com/gke-node-pool-name') or  # Older GKE
@@ -136,10 +136,10 @@ class KubernetesClient:
             node.metadata.labels.get('kubernetes.io/cluster') or                # Generic cluster label
             node.metadata.labels.get('agentpool')                               # AKS alternative
         )
-        
+
         if node_group:
             return node_group
-            
+
         # 3. Extract from node name patterns
         return self.extract_nodegroup_from_name(node.metadata.name)
 
@@ -147,7 +147,7 @@ class KubernetesClient:
         """Extract node group from common cloud provider naming patterns"""
         if not node_name:
             return None
-            
+
         # GKE pattern: gke-cluster-name-nodepool-name-hash-node
         # Example: gke-my-cluster-default-pool-12345678-abcd
         if node_name.startswith('gke-'):
@@ -161,7 +161,7 @@ class KubernetesClient:
                         return '-'.join(parts[2:i+1])  # e.g., "default-pool"
                     elif 'pool' in parts[i]:
                         return parts[i]  # e.g., "nodepool1"
-        
+
         # EKS pattern: ip-10-0-1-23.region.compute.internal or eksctl generated names
         # Often contains nodegroup name in various positions
         if 'nodegroup' in node_name.lower():
@@ -169,24 +169,24 @@ class KubernetesClient:
             for i, part in enumerate(parts):
                 if 'nodegroup' in part or 'ng' in part:
                     return part
-        
+
         # AKS pattern: aks-nodepool1-12345678-vmss000000
         if node_name.startswith('aks-'):
             parts = node_name.split('-')
             if len(parts) >= 3:
                 return parts[1]  # Usually the nodepool name
-        
+
         # Generic patterns - look for common nodepool indicators
         lower_name = node_name.lower()
         pool_indicators = ['pool', 'group', 'nodes', 'worker', 'spot', 'gpu', 'cpu']
-        
+
         for indicator in pool_indicators:
             if indicator in lower_name:
                 parts = node_name.split('-')
                 for part in parts:
                     if indicator in part.lower():
                         return part
-        
+
         # If no pattern matches, return None (will show as "default" in UI)
         return None
 
@@ -195,7 +195,7 @@ class KubernetesClient:
         try:
             nodes_response = self.v1.list_node()
             pods_response = self.v1.list_pod_for_all_namespaces()
-            
+
             # Try to get node metrics
             node_metrics = {}
             try:
@@ -217,9 +217,9 @@ class KubernetesClient:
             nodes = []
             for node in nodes_response.items:
                 # Calculate pod resources on this node
-                node_pods = [pod for pod in pods_response.items 
+                node_pods = [pod for pod in pods_response.items
                            if pod.spec.node_name == node.metadata.name]
-                
+
                 cpu_requests = cpu_limits = memory_requests = memory_limits = 0.0
                 for pod in node_pods:
                     if pod.spec.containers:
@@ -368,82 +368,86 @@ class KubernetesClient:
 
 class NodeTable(DataTable):
     """Table widget for displaying nodes"""
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.cursor_type = "row"
         self.zebra_stripes = True
-        
+
     def on_mount(self) -> None:
         self.add_columns(
-            "Name", "Status", "Node Group", "Age", "Instance", 
+            "Name", "Status", "Node Group", "Age", "Instance",
             "CPU Req", "CPU %", "Mem Req", "Mem %", "Zone"
         )
 
 
 class PodTable(DataTable):
     """Table widget for displaying pods"""
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.cursor_type = "row"
         self.zebra_stripes = True
-        
+
     def on_mount(self) -> None:
         self.add_columns(
-            "Name", "Namespace", "Ready", "Status", "Restarts", 
+            "Name", "Namespace", "Ready", "Status", "Restarts",
             "Age", "CPU Req", "Mem Req", "IP"
         )
 
 
 class KUVApp(App):
     """Kubernetes Usage Viewer TUI Application"""
-    
+
     CSS = """
     Screen {
         layout: grid;
         grid-size: 1 4;
         grid-rows: 3 18 14 3;
     }
-    
+
     .header {
         background: $primary;
         color: $text;
         content-align: center middle;
     }
-    
+
     .nodes {
         background: $surface;
         border: solid $primary;
         height: 100%;
     }
-    
+
     .pods {
         background: $surface;
         border: solid $primary;
         height: 100%;
     }
-    
+
     .status {
         background: $surface;
         border: solid $primary;
         content-align: center middle;
     }
-    
+
     DataTable {
         height: 100%;
         scrollbar-size: 1 1;
         scrollbar-size-horizontal: 1;
         scrollbar-size-vertical: 1;
     }
-    
+
+    DataTable:focus {
+        border: thick $accent;
+    }
+
     #nodes-title {
         height: 1;
         content-align: left middle;
         padding: 0 1;
         background: $surface;
     }
-    
+
     #pods-title {
         height: 1;
         content-align: left middle;
@@ -460,13 +464,17 @@ class KUVApp(App):
         Binding("1", "sort_name", "Sort Name"),
         Binding("2", "sort_cpu_percent", "Sort CPU%"),
         Binding("3", "sort_mem_percent", "Sort Mem%"),
-        Binding("4", "sort_cpu_requests", "Sort CPU Req"),
-        Binding("5", "sort_mem_requests", "Sort Mem Req"),
+        Binding("4", "sort_cpu_requests", "Sort CPU"),
+        Binding("5", "sort_mem_requests", "Sort Mem"),
         Binding("pageup", "page_up", "Page Up"),
         Binding("pagedown", "page_down", "Page Down"),
         Binding("home", "go_home", "Top"),
         Binding("end", "go_end", "Bottom"),
         Binding("a", "toggle_auto_refresh", "Auto-refresh"),
+        Binding("tab", "focus_next", "Next Pane"),
+        Binding("shift+tab", "focus_previous", "Prev Pane"),
+        Binding("n", "focus_nodes", "Nodes"),
+        Binding("p", "focus_pods", "Pods"),
     ]
 
     nodes: reactive[List[NodeInfo]] = reactive(list)
@@ -487,21 +495,21 @@ class KUVApp(App):
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield Header()
-        
+
         with Container(classes="header"):
             yield Static("Kubernetes Usage Viewer (KUV) - Node Utilization Monitor", id="title")
-            
+
         with Container(classes="nodes"):
             yield Static("Nodes", id="nodes-title")
             yield NodeTable(id="node-table")
-            
+
         with Container(classes="pods"):
             yield Static("Pods", id="pods-title")
             yield PodTable(id="pod-table")
-            
+
         with Container(classes="status"):
             yield Static("Initializing...", id="status")
-            
+
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -513,40 +521,51 @@ class KUVApp(App):
             await self.refresh_data()
             # Start auto-refresh timer
             if self.auto_refresh_enabled:
-                self.refresh_timer = self.set_interval(8.0, self.auto_refresh)
+                self.refresh_timer = self.set_interval(16.0, self.auto_refresh)
         except Exception as e:
             self.update_status(f"Error: {e}")
 
     async def auto_refresh(self) -> None:
-        """Auto-refresh data every 8 seconds"""
+        """Auto-refresh data every 16 seconds"""
         if self.auto_refresh_enabled:
-            await self.refresh_data(auto=True)
+            # Run refresh in background to avoid blocking UI
+            self.run_worker(self.refresh_data(auto=True), exclusive=False)
 
     async def refresh_data(self, auto: bool = False) -> None:
         """Refresh node and pod data"""
         if not self.k8s_client:
             return
-            
+
         try:
-            refresh_type = "Auto-refreshing" if auto else "Refreshing"
-            self.update_status(f"{refresh_type} data...")
-            self.nodes = await self.k8s_client.get_nodes()
+            # Only show refresh status for manual refresh to avoid UI flicker
+            if not auto:
+                self.update_status("Refreshing data...")
+
+            # Fetch data in background
+            nodes = await self.k8s_client.get_nodes()
+
+            # Update UI data - no need for call_from_thread in async context
+            self.nodes = nodes
             self.update_node_table()
-            
+
+            # Only refresh pods if a node is selected
             if self.selected_node:
-                self.pods = await self.k8s_client.get_pods_for_node(self.selected_node.name)
+                pods = await self.k8s_client.get_pods_for_node(self.selected_node.name)
+                self.pods = pods
                 self.update_pod_table()
-                
+
+            # Update status
             node_table = self.query_one("#node-table", NodeTable)
             current_row = node_table.cursor_row + 1 if node_table.cursor_row >= 0 else 0
             auto_indicator = " [AUTO]" if self.auto_refresh_enabled else ""
             self.update_status(f"Updated: {datetime.now().strftime('%H:%M:%S')} | Nodes: {current_row}/{len(self.nodes)} | Pods: {len(self.pods)} | Sort: {self.sort_column.replace('_', ' ').title()}{auto_indicator}")
+
         except Exception as e:
             self.update_status(f"Error: {e}")
 
-    async def action_refresh(self) -> None:
+    def action_refresh(self) -> None:
         """Manual refresh data"""
-        await self.refresh_data()
+        self.run_worker(self.refresh_data(auto=False), exclusive=False)
 
     def update_status(self, message: str) -> None:
         """Update the status bar"""
@@ -561,7 +580,7 @@ class KUVApp(App):
         """Update the node table with current data"""
         table = self.query_one("#node-table", NodeTable)
         table.clear()
-        
+
         # Sort nodes based on current sort column
         def sort_key(node):
             if self.sort_column == "name":
@@ -576,21 +595,21 @@ class KUVApp(App):
                 return node.memory_requests
             else:
                 return node.name
-        
+
         sorted_nodes = sorted(self.nodes, key=sort_key, reverse=self.sort_reverse)
-        
+
         for node in sorted_nodes:
             cpu_percent = (node.cpu_requests / node.cpu_allocatable * 100) if node.cpu_allocatable > 0 else 0
             mem_percent = (node.memory_requests / node.memory_allocatable * 100) if node.memory_allocatable > 0 else 0
-            
+
             # Format values
             cpu_req = f"{node.cpu_requests:.1f}" if node.cpu_requests >= 1 else f"{node.cpu_requests*1000:.0f}m"
             mem_req = self.format_bytes(node.memory_requests)
-            
+
             # Color coding for utilization
             cpu_color = "green" if cpu_percent < 50 else "yellow" if cpu_percent < 80 else "red"
             mem_color = "green" if mem_percent < 50 else "yellow" if mem_percent < 80 else "red"
-            
+
             table.add_row(
                 node.name,
                 Text(node.status, style="green" if node.ready else "red"),
@@ -608,18 +627,18 @@ class KUVApp(App):
         """Update the pod table with current data"""
         table = self.query_one("#pod-table", PodTable)
         table.clear()
-        
+
         for pod in self.pods:
             cpu_req = f"{pod.cpu_requests:.1f}" if pod.cpu_requests >= 1 else f"{pod.cpu_requests*1000:.0f}m"
             mem_req = self.format_bytes(pod.memory_requests)
-            
+
             status_color = {
                 "Running": "green",
-                "Pending": "yellow", 
+                "Pending": "yellow",
                 "Failed": "red",
                 "Succeeded": "blue"
             }.get(pod.status, "white")
-            
+
             table.add_row(
                 pod.name,
                 pod.namespace,
@@ -636,33 +655,33 @@ class KUVApp(App):
         """Format bytes to human readable format"""
         if bytes_val == 0:
             return "0B"
-        
+
         units = ['B', 'KB', 'MB', 'GB', 'TB']
         size = bytes_val
         unit_index = 0
-        
+
         while size >= 1024 and unit_index < len(units) - 1:
             size /= 1024
             unit_index += 1
-            
+
         return f"{size:.1f}{units[unit_index]}"
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle node selection"""
         # Update status to show selection is working
         self.update_status(f"Selected row {event.cursor_row} in table {event.data_table.id}")
-        
+
         if event.data_table.id == "node-table" and self.nodes and event.cursor_row < len(self.nodes):
             selected_node = self.nodes[event.cursor_row]
             self.selected_node = selected_node
-            
+
             # Update pods title
             pods_title = self.query_one("#pods-title", Static)
             pods_title.update(f"Pods on {selected_node.name}")
-            
+
             # Update status
             self.update_status(f"Loading pods for {selected_node.name}...")
-            
+
             # Fetch pods for selected node - run async task
             self.run_worker(self.fetch_pods_for_selected_node(selected_node.name))
 
@@ -746,14 +765,14 @@ class KUVApp(App):
         if node_table.cursor_row >= 0 and self.nodes and node_table.cursor_row < len(self.nodes):
             selected_node = self.nodes[node_table.cursor_row]
             self.selected_node = selected_node
-            
+
             # Update pods title
             pods_title = self.query_one("#pods-title", Static)
             pods_title.update(f"Pods on {selected_node.name}")
-            
+
             # Update status
             self.status_text = f"Loading pods for {selected_node.name}..."
-            
+
             # Fetch pods for selected node - run async task
             self.run_worker(self.fetch_pods_for_selected_node(selected_node.name))
         else:
@@ -784,7 +803,7 @@ class KUVApp(App):
     def action_toggle_auto_refresh(self) -> None:
         """Toggle auto-refresh on/off"""
         self.auto_refresh_enabled = not self.auto_refresh_enabled
-        
+
         if self.auto_refresh_enabled:
             # Start auto refresh
             self.refresh_timer = self.set_interval(8.0, self.auto_refresh)
@@ -795,6 +814,24 @@ class KUVApp(App):
                 self.refresh_timer.stop()
                 self.refresh_timer = None
             self.update_status("Auto-refresh disabled")
+
+    def action_focus_nodes(self) -> None:
+        """Focus on the nodes table"""
+        node_table = self.query_one("#node-table", NodeTable)
+        node_table.focus()
+
+    def action_focus_pods(self) -> None:
+        """Focus on the pods table"""
+        pod_table = self.query_one("#pod-table", PodTable)
+        pod_table.focus()
+
+    def action_focus_next(self) -> None:
+        """Focus next widget (Tab)"""
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        """Focus previous widget (Shift+Tab)"""
+        self.focus_previous()
 
 
 def main():
